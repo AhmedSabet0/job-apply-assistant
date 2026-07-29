@@ -56,6 +56,13 @@
   <div class="sub">Installable Android app. Share any job post to it from another app to auto-fill it here, generate a tailored cover letter, then hand off to Gmail to attach & send.</div>
 
   <div class="note">
+    ⚠️ Browsers can't send SMTP email directly, and there's no way for a webpage to
+    auto-attach a file into Gmail's compose window — both are browser security
+    restrictions, not something this tool can bypass. To make it as fast as possible:
+    picking your CV auto-extracts it immediately, sharing a job post from any app
+    auto-fills it here, and clicking "Open Gmail Draft" both opens the pre-filled
+    draft <b>and</b> auto-downloads your CV so it's sitting right there in your
+    Downloads folder — just drag it in and hit Send.
     <br><br>
     💾 Your CV, OpenRouter key and model choice are saved on this device
     (localStorage) so you won't need to re-enter them next time. Nothing is sent
@@ -133,6 +140,39 @@ if ("serviceWorker" in navigator) {
   });
 }
 
+function htmlToText(html) {
+  html = html.replace(/<script[\s\S]*?<\/script>/gi, " ")
+             .replace(/<style[\s\S]*?<\/style>/gi, " ")
+             .replace(/<!--[\s\S]*?-->/g, " ");
+  const div = document.createElement("div");
+  div.innerHTML = html;
+  let text = div.textContent || div.innerText || "";
+  text = text.replace(/[ \t]+/g, " ").replace(/\n\s*\n+/g, "\n\n").trim();
+  return text;
+}
+
+async function tryFetchUrlContent(url) {
+  showMsg($("shareMsg"), "Link received — trying to auto-fetch the job post content...", true);
+  try {
+    const proxyUrl = "https://api.allorigins.win/raw?url=" + encodeURIComponent(url);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    const res = await fetch(proxyUrl, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!res.ok) throw new Error("Site returned HTTP " + res.status);
+    const html = await res.text();
+    const text = htmlToText(html);
+    if (text.length < 80) {
+      throw new Error("Page returned almost no readable text — it likely needs JavaScript to render (common on LinkedIn/Facebook)");
+    }
+    $("jobPost").value = text.slice(0, 8000);
+    tryAutoFillEmail();
+    showMsg($("shareMsg"), "Fetched the job post content from the link automatically — review it below before generating.", true);
+  } catch (e) {
+    showMsg($("shareMsg"), "Couldn't auto-read that link (" + e.message + "). Open it, copy the job post text yourself, and paste it into the box below.", false);
+  }
+}
+
 function handleIncomingShare() {
   const params = new URLSearchParams(window.location.search);
   const sharedTitle = params.get("shared_title") || "";
@@ -147,7 +187,7 @@ function handleIncomingShare() {
   }
 
   if (sharedUrl && !combined) {
-    showMsg($("shareMsg"), "Received a link but no text: " + sharedUrl + " — open it and paste the job description manually below, since the app can't fetch page content automatically.", false);
+    tryFetchUrlContent(sharedUrl);
   } else if (sharedUrl) {
     showMsg($("shareMsg"), "Job post received from share. Link included: " + sharedUrl, true);
   } else {
