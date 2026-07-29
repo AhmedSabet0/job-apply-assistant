@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Job Application Assistant</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0f172a">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+<style>
+  :root {
+    --bg: #0f172a; --panel: #1e293b; --panel-2: #263449; --border: #334155;
+    --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8; --accent-2: #22c55e; --danger: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg); color:var(--text); min-height:100vh; padding:32px 16px; }
+  .wrap { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 24px; margin-bottom: 4px; }
+  .sub { color: var(--muted); margin-bottom: 28px; font-size: 14px; }
+  .step { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 18px; }
+  .step h2 { font-size: 15px; margin: 0 0 14px 0; display:flex; align-items:center; gap:8px; }
+  .badge { background: var(--accent); color:#0f172a; width:22px; height:22px; border-radius:50%;
+    display:inline-flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; }
+  label { display:block; font-size:13px; color:var(--muted); margin:10px 0 6px; }
+  input[type=text], input[type=email], input[type=password], textarea, select {
+    width:100%; background:var(--panel-2); border:1px solid var(--border); color:var(--text);
+    padding:10px 12px; border-radius:8px; font-size:14px; font-family:inherit; }
+  textarea { resize: vertical; min-height: 100px; }
+  input[type=file] { color: var(--muted); font-size: 13px; }
+  button { background: var(--accent); color:#0f172a; border:none; padding:10px 18px;
+    border-radius:8px; font-weight:700; cursor:pointer; font-size:14px; margin-top:14px; }
+  button.secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+  button.send { background: var(--accent-2); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .row { display:flex; gap:12px; flex-wrap:wrap; }
+  .row > div { flex:1; min-width:220px; }
+  .msg { margin-top:10px; font-size:13px; padding:10px; border-radius:8px; display:none; }
+  .msg.ok { background: rgba(34,197,94,.12); color:#4ade80; display:block; }
+  .msg.err { background: rgba(248,113,113,.12); color:var(--danger); display:block; }
+  .hint { color: var(--muted); font-size:12px; margin-top:6px; }
+  .hint a { color: var(--accent); }
+  .cv-preview { background: var(--panel-2); border:1px solid var(--border); border-radius:8px; padding:10px;
+    font-size:12px; color:var(--muted); max-height:120px; overflow-y:auto; margin-top:8px; white-space:pre-wrap; }
+  .locked { opacity:.5; pointer-events:none; }
+  .note { background: rgba(56,189,248,.1); border:1px solid rgba(56,189,248,.3); color:#7dd3fc;
+    padding:12px 14px; border-radius:8px; font-size:13px; margin-bottom:18px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Job Application Assistant</h1>
+  <div class="sub">Installable Android app. Share any job post to it from another app to auto-fill it here, generate a tailored cover letter, then hand off to Gmail to attach & send.</div>
+
+  <div class="note">
+    ⚠️ Browsers can't send SMTP email directly, and there's no way for a webpage to
+    auto-attach a file into Gmail's compose window — both are browser security
+    restrictions, not something this tool can bypass. To make it as fast as possible:
+    picking your CV auto-extracts it immediately, sharing a job post from any app
+    auto-fills it here, and clicking "Open Gmail Draft" both opens the pre-filled
+    draft <b>and</b> auto-downloads your CV so it's sitting right there in your
+    Downloads folder — just drag it in and hit Send.
+    <br><br>
+    💾 Your CV, OpenRouter key and model choice are saved on this device
+    (localStorage) so you won't need to re-enter them next time. Nothing is sent
+    anywhere except OpenRouter (for generation) and Gmail (when you open the draft).
+    Use "Clear saved data" below if this device is shared with others.
+  </div>
+  <button id="clearDataBtn" class="secondary" style="margin-bottom:10px;">Clear saved data</button>
+  <div class="msg" id="shareMsg" style="margin-bottom:10px;"></div>
+
+  <!-- STEP 1: CV -->
+  <div class="step" id="step1">
+    <h2><span class="badge">1</span> Upload your CV</h2>
+    <input type="file" id="cvFile" accept=".pdf,.docx,.txt">
+    <div class="hint">Text is extracted automatically the moment you pick a file — no button to click.</div>
+    <div class="msg" id="cvMsg"></div>
+    <div class="cv-preview" id="cvPreview" style="display:none;"></div>
+  </div>
+
+  <!-- STEP 2: Job post + API key -->
+  <div class="step locked" id="step2">
+    <h2><span class="badge">2</span> Job post & cover letter generation</h2>
+    <label>Paste the job post</label>
+    <textarea id="jobPost" placeholder="Paste the full job description / post here..."></textarea>
+
+    <div class="row">
+      <div>
+        <label>OpenRouter API key</label>
+        <input type="password" id="openrouterKey" placeholder="sk-or-v1-...">
+        <div class="hint">Get one at <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai/keys</a>. Used only in your browser, never stored or sent anywhere else.</div>
+      </div>
+      <div>
+        <label>Model</label>
+        <input type="text" id="model" value="openai/gpt-4o-mini" placeholder="e.g. anthropic/claude-3.5-sonnet">
+      </div>
+    </div>
+
+    <button id="genBtn">Generate Cover Letter</button>
+    <div class="msg" id="genMsg"></div>
+
+    <div id="coverLetterBlock" style="display:none; margin-top:16px;">
+      <label>Cover letter (editable)</label>
+      <textarea id="coverLetter" style="min-height:220px;"></textarea>
+    </div>
+  </div>
+
+  <!-- STEP 3: Send -->
+  <div class="step locked" id="step3">
+    <h2><span class="badge">3</span> Hand off to Gmail</h2>
+    <div class="row">
+      <div>
+        <label>Recruiter / company email</label>
+        <input type="email" id="toEmail" placeholder="hr@company.com">
+        <div class="hint" id="guessHint"></div>
+      </div>
+      <div>
+        <label>Subject (auto-filled by AI, editable)</label>
+        <input type="text" id="subject" placeholder="Generated automatically after Step 2">
+      </div>
+    </div>
+    <button id="sendBtn" class="send">Open Gmail Draft</button>
+    <div class="msg" id="sendMsg"></div>
+    <div class="hint">Gmail will open in a new tab with the recipient, subject and cover letter filled in. Drag your CV file into the compose window to attach it, then hit Send yourself.</div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+if (window.pdfjsLib) {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+}
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch((e) => console.warn("SW registration failed:", e));
+  });
+}
+
+function handleIncomingShare() {
+  const params = new URLSearchParams(window.location.search);
+  const sharedTitle = params.get("shared_title") || "";
+  const sharedText = params.get("shared_text") || "";
+  const sharedUrl = params.get("shared_url") || "";
+  if (!sharedTitle && !sharedText && !sharedUrl) return;
+
+  const combined = [sharedTitle, sharedText].filter(Boolean).join("\n\n").trim();
+  if (combined) {
+    $("jobPost").value = combined;
+  }
+
+  if (sharedUrl && !combined) {
+    showMsg($("shareMsg"), "Received a link but no text: " + sharedUrl + " — open it and paste the job description manually below, since the app can't fetch page content automatically.", false);
+  } else if (sharedUrl) {
+    showMsg($("shareMsg"), "Job post received from share. Link included: " + sharedUrl, true);
+  } else {
+    showMsg($("shareMsg"), "Job post text received from share — review it below.", true);
+  }
+
+  // Clean the URL so a refresh doesn't re-trigger the same share.
+  window.history.replaceState({}, document.title, window.location.pathname);
+  window.scrollTo({ top: document.getElementById("step2").offsetTop - 20, behavior: "smooth" });
+}
+
+const STORE_KEY = "jobAppAssistant_v1";
+
+function showMsg(el, text, ok) {
+  el.textContent = text;
+  el.className = "msg " + (ok ? "ok" : "err");
+}
+
+function loadStore() {
+  try {
+    return JSON.parse(localStorage.getItem(STORE_KEY) || "{}");
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveStore(patch) {
+  const current = loadStore();
+  const updated = Object.assign(current, patch);
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify(updated));
+  } catch (e) {
+    console.warn("Could not save to localStorage:", e);
+  }
+}
+
+function dataUrlToBlob(dataUrl) {
+  const [meta, b64] = dataUrl.split(",");
+  const mime = meta.match(/data:(.*?);base64/)[1];
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return new Blob([arr], { type: mime });
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+
+async function extractPdfText(file) {
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  let text = "";
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    text += content.items.map(it => it.str).join(" ") + "\n";
+  }
+  return text;
+}
+
+async function extractDocxText(file) {
+  const buf = await file.arrayBuffer();
+  const result = await mammoth.extractRawText({ arrayBuffer: buf });
+  return result.value;
+}
+
+async function extractTxtText(file) {
+  return await file.text();
+}
+
+async function processCvFile(file) {
+  const ext = file.name.split(".").pop().toLowerCase();
+  showMsg($("cvMsg"), "Extracting text...", true);
+  try {
+    let text = "";
+    if (ext === "pdf") text = await extractPdfText(file);
+    else if (ext === "docx") text = await extractDocxText(file);
+    else if (ext === "txt") text = await extractTxtText(file);
+    else throw new Error("Unsupported file type: " + ext);
+
+    if (!text.trim()) throw new Error("Could not extract any text from this file.");
+
+    window.__cvText = text;
+    window.__cvFileName = file.name;
+
+    const dataUrl = await fileToDataUrl(file);
+    saveStore({ cvText: text, cvFileName: file.name, cvDataUrl: dataUrl });
+
+    showMsg($("cvMsg"), `Loaded "${file.name}" (${text.length} characters extracted, saved for next time).`, true);
+    $("cvPreview").style.display = "block";
+    $("cvPreview").textContent = text.slice(0, 600) + "...";
+    $("step2").classList.remove("locked");
+    $("step3").classList.remove("locked");
+  } catch (e) {
+    showMsg($("cvMsg"), "Failed: " + e.message, false);
+  }
+}
+
+$("cvFile").addEventListener("change", () => {
+  const file = $("cvFile").files[0];
+  if (file) processCvFile(file);
+});
+
+$("jobPost").addEventListener("blur", () => {
+  const jobPost = $("jobPost").value.trim();
+  if (!jobPost || $("toEmail").value) return;
+  const match = jobPost.match(/[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+/);
+  if (match) {
+    $("toEmail").value = match[0];
+    $("guessHint").textContent = "Auto-detected from job post — double check it.";
+  }
+});
+
+$("openrouterKey").addEventListener("blur", () => saveStore({ openrouterKey: $("openrouterKey").value.trim() }));
+$("model").addEventListener("blur", () => saveStore({ model: $("model").value.trim() }));
+
+$("clearDataBtn").addEventListener("click", () => {
+  localStorage.removeItem(STORE_KEY);
+  window.__cvText = null;
+  window.__cvFileName = null;
+  $("cvFile").value = "";
+  $("openrouterKey").value = "";
+  $("model").value = "openai/gpt-4o-mini";
+  $("cvPreview").style.display = "none";
+  $("coverLetterBlock").style.display = "none";
+  $("step2").classList.add("locked");
+  $("step3").classList.add("locked");
+  showMsg($("cvMsg"), "Saved data cleared.", true);
+});
+
+window.addEventListener("DOMContentLoaded", () => {
+  const store = loadStore();
+  if (store.openrouterKey) $("openrouterKey").value = store.openrouterKey;
+  if (store.model) $("model").value = store.model;
+  if (store.cvText && store.cvFileName) {
+    window.__cvText = store.cvText;
+    window.__cvFileName = store.cvFileName;
+    if (store.cvDataUrl) window.__cvDataUrl = store.cvDataUrl;
+    showMsg($("cvMsg"), `Restored "${store.cvFileName}" from last time (${store.cvText.length} characters). Pick a new file to replace it.`, true);
+    $("cvPreview").style.display = "block";
+    $("cvPreview").textContent = store.cvText.slice(0, 600) + "...";
+    $("step2").classList.remove("locked");
+    $("step3").classList.remove("locked");
+  }
+  handleIncomingShare();
+});
+
+$("genBtn").addEventListener("click", async () => {
+  const jobPost = $("jobPost").value.trim();
+  const key = $("openrouterKey").value.trim();
+  const model = $("model").value.trim();
+  if (!jobPost || !key) { showMsg($("genMsg"), "Job post and OpenRouter API key are required.", false); return; }
+  if (!window.__cvText) { showMsg($("genMsg"), "Upload your CV first.", false); return; }
+
+  saveStore({ openrouterKey: key, model: model });
+
+  $("genBtn").disabled = true;
+  $("genBtn").textContent = "Generating...";
+  showMsg($("genMsg"), "Calling the model, this can take a few seconds...", true);
+
+  const systemPrompt = "You are an expert career coach and professional cover letter writer. " +
+    "Given a candidate's CV and a target job post, produce two things:\n" +
+    "1. A short, specific, compelling email subject line for the job application (no quotes, no 'Subject:' prefix, just the line itself).\n" +
+    "2. A cover letter body (220-320 words) ready to paste directly as an email body.\n\n" +
+    "STRICT RULES for the cover letter:\n" +
+    "- Ground every claim STRICTLY in what is actually written in the CV. Never invent certifications, " +
+    "internships, employers, or skills that are not present in the CV text given to you.\n" +
+    "- Do NOT include any letterhead block (no name/email/phone/date/address lines) and do NOT include " +
+    "placeholder brackets like [Date] or [Company Name]. Start straight with a greeting line such as " +
+    "'Dear Hiring Manager,' or, if a company name is clearly stated in the job post, use it naturally.\n" +
+    "- Open by naming the specific role from the job post. Then connect 2-3 concrete, real items from the " +
+    "CV directly to what the job post is asking for — be specific (tools, protocols, systems, tasks), not generic buzzwords.\n" +
+    "- End with a short, confident closing line and 'Sincerely,' followed by the candidate's full name as it appears in the CV.\n" +
+    "- Natural, professional tone. No corporate filler like 'I am excited about the opportunity to contribute to your team' unless followed by something concrete.\n\n" +
+    "Respond with ONLY a raw JSON object, no markdown code fences, no extra text, in exactly this shape: " +
+    "{\"subject\": \"...\", \"cover_letter\": \"...\"}";
+  const userPrompt = "CANDIDATE CV:\n" + window.__cvText + "\n\n---\n\nJOB POST:\n" + jobPost;
+
+  try {
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + key,
+        "Content-Type": "application/json",
+        "HTTP-Referer": window.location.href,
+        "X-Title": "Job Application Assistant"
+      },
+      body: JSON.stringify({
+        model: model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt }
+        ]
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error((data.error && data.error.message) || res.statusText);
+    let raw = data.choices[0].message.content.trim();
+    raw = raw.replace(/^```json\s*/i, "").replace(/^```\s*/, "").replace(/```\s*$/, "").trim();
+
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (parseErr) {
+      parsed = { subject: "", cover_letter: raw };
+    }
+
+    $("coverLetter").value = (parsed.cover_letter || "").trim();
+    $("coverLetterBlock").style.display = "block";
+    if (parsed.subject && !$("subject").value.trim()) {
+      $("subject").value = parsed.subject.trim();
+    }
+    showMsg($("genMsg"), "Cover letter and subject generated. Review/edit below.", true);
+  } catch (e) {
+    showMsg($("genMsg"), "Failed: " + e.message, false);
+  } finally {
+    $("genBtn").disabled = false;
+    $("genBtn").textContent = "Generate Cover Letter";
+  }
+});
+
+$("sendBtn").addEventListener("click", () => {
+  const to = $("toEmail").value.trim();
+  const subject = $("subject").value.trim() || "Job Application";
+  const body = $("coverLetter").value.trim();
+  if (!to || !body) {
+    showMsg($("sendMsg"), "Fill the recipient email and generate/write the cover letter first.", false);
+    return;
+  }
+
+  const store = loadStore();
+  const dataUrl = window.__cvDataUrl || store.cvDataUrl;
+  const fileName = window.__cvFileName || store.cvFileName;
+  if (dataUrl && fileName) {
+    try {
+      const blob = dataUrlToBlob(dataUrl);
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (e) {
+      console.warn("Auto-download of CV failed:", e);
+    }
+  }
+
+  const url = "https://mail.google.com/mail/?view=cm&fs=1&to=" +
+    encodeURIComponent(to) + "&su=" + encodeURIComponent(subject) + "&body=" + encodeURIComponent(body);
+  window.open(url, "_blank");
+  showMsg($("sendMsg"), "Gmail draft opened, and your CV was downloaded — drag it from your Downloads folder into the compose window, then hit Send.", true);
+});
+
+</script>
+</body>
+</html>
