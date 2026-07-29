@@ -264,6 +264,8 @@ function tryAutoFillEmail() {
   if (match) {
     $("toEmail").value = match[0];
     $("guessHint").textContent = "Auto-detected from job post — double check it.";
+  } else {
+    $("guessHint").textContent = "No email found in the job post text — enter the recruiter's email manually.";
   }
 }
 
